@@ -42,6 +42,20 @@ def fast_hist(a, b, n):
     #--------------------------------------------------------------------------------#
     return np.bincount(n * a[k].astype(int) + b[k], minlength=n ** 2).reshape(n, n)  
 
+
+# 设标签宽W，长H
+def fast_hist_nobg(a, b, n):
+    #--------------------------------------------------------------------------------#
+    #   a是转化成一维数组的标签，形状(H×W,)；b是转化成一维数组的预测结果，形状(H×W,)
+    #--------------------------------------------------------------------------------#
+    k = (a >= 0) & (a < n)
+    #--------------------------------------------------------------------------------#
+    #   np.bincount计算了从0到n**2-1这n**2个数中每个数出现的次数，返回值形状(n, n)
+    #   返回中，写对角线上的为分类正确的像素点
+    #--------------------------------------------------------------------------------#
+    hist  = np.bincount(n * a[k].astype(int) + b[k], minlength=n ** 2).reshape(n, n) 
+    return  hist[1:, 1:]  # 忽略背景类，返回目标类的混淆矩阵部分
+
 def per_class_iu(hist):
     return np.diag(hist) / np.maximum((hist.sum(1) + hist.sum(0) - np.diag(hist)), 1) 
 
@@ -54,12 +68,27 @@ def per_class_Precision(hist):
 def per_Accuracy(hist):
     return np.sum(np.diag(hist)) / np.maximum(np.sum(hist), 1) 
 
+
+
+def per_dice_coefficient(hist):
+    dice_list = []
+    # print(hist)
+    for i in range(0, len(hist)):  # 从 1 开始排除背景
+        TP = hist[i, i]  # 正确预测的像素
+        FP = np.sum(hist[:, i]) - TP  # 错误预测为类别 i 的像素
+        FN = np.sum(hist[i, :]) - TP  # 实际为类别 i 但被预测为其他类别的像素
+        dice =  2 * TP / (2 * TP + FP + FN)
+        dice_list.append(dice)
+
+    # mDice = np.mean(dice_list)
+    return dice_list
+
 def compute_mIoU(gt_dir, pred_dir, png_name_list, num_classes, name_classes=None):  
     print('Num classes', num_classes)  
     #-----------------------------------------#
     #   创建一个全是0的矩阵，是一个混淆矩阵
     #-----------------------------------------#
-    hist = np.zeros((num_classes, num_classes))
+    hist = np.zeros((num_classes , num_classes  ))
     
     #------------------------------------------------#
     #   获得验证集标签路径列表，方便直接读取
@@ -92,6 +121,7 @@ def compute_mIoU(gt_dir, pred_dir, png_name_list, num_classes, name_classes=None
         #------------------------------------------------#
         #   对一张图片计算21×21的hist矩阵，并累加
         #------------------------------------------------#
+
         hist += fast_hist(label.flatten(), pred.flatten(), num_classes)  
         # 每计算10张就输出一下目前已计算的图片中所有类别平均的mIoU值
         if name_classes is not None and ind > 0 and ind % 10 == 0: 
@@ -109,19 +139,40 @@ def compute_mIoU(gt_dir, pred_dir, png_name_list, num_classes, name_classes=None
     IoUs        = per_class_iu(hist)
     PA_Recall   = per_class_PA_Recall(hist)
     Precision   = per_class_Precision(hist)
+
+    Dice = per_dice_coefficient(hist)
+    # print(Dice)
     #------------------------------------------------#
     #   逐类别输出一下mIoU值
     #------------------------------------------------#
     if name_classes is not None:
         for ind_class in range(num_classes):
-            print('===>' + name_classes[ind_class] + ':\tIou-' + str(round(IoUs[ind_class] * 100, 2)) \
-                + '; Recall (equal to the PA)-' + str(round(PA_Recall[ind_class] * 100, 2))+ '; Precision-' + str(round(Precision[ind_class] * 100, 2)))
-
+            print(f"===> {name_classes[ind_class]:<15}: mIoU-{round(IoUs[ind_class] * 100, 2):<6}; "
+                f"Recall (equal to the PA)-{round(PA_Recall[ind_class] * 100, 2):<6}; "
+                f"Precision-{round(Precision[ind_class] * 100, 2):<6}; "
+                f"Dice-{round(Dice[ind_class] * 100, 2):<6}")
+        
+        # 打印平均值
+    print(f"===(不包含背景)> mIoU: {round(np.nanmean(IoUs[1:]) * 100, 2):<6}; "
+            f"mPA: {round(np.nanmean(PA_Recall[1:]) * 100, 2):<6}; "
+            f"Accuracy: {round(np.nanmean(Precision[1:]) * 100, 2):<6}; "
+            f"Dice: {round(np.nanmean(Dice[1:]) * 100, 2):<6}")
+    print(f"===(包含背景)> mIoU: {round(np.nanmean(IoUs) * 100, 2):<6}; "
+            f"mPA: {round(np.nanmean(PA_Recall) * 100, 2):<6}; "
+            f"Accuracy: {round(np.nanmean(Precision) * 100, 2):<6}; "
+            f"Dice: {round(np.nanmean(Dice) * 100, 2):<6}")
     #-----------------------------------------------------------------#
     #   在所有验证集图像上求所有类别平均的mIoU值，计算时忽略NaN值
     #-----------------------------------------------------------------#
-    print('===> mIoU: ' + str(round(np.nanmean(IoUs) * 100, 2)) + '; mPA: ' + str(round(np.nanmean(PA_Recall) * 100, 2)) + '; Accuracy: ' + str(round(per_Accuracy(hist) * 100, 2)))  
+    # print('===> mIoU: ' + str(round(np.nanmean(IoUs) * 100, 2)) + '; mPA: ' + str(round(np.nanmean(PA_Recall) * 100, 2)) + '; Accuracy: ' + str(round(per_Accuracy(hist) * 100, 2)))  
+    # print(IoUs)
+    # print(PA_Recall)
+    # print(Precision)
+    
+    # print(per_Accuracy(hist))
+   
     return np.array(hist, np.int64), IoUs, PA_Recall, Precision
+    # return np.array(hist, np.int), IoUs, PA_Recall, Precision
 
 def adjust_axes(r, t, fig, axes):
     bb                  = t.get_window_extent(renderer=r)
